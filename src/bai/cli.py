@@ -10,6 +10,7 @@ from .config.router import ProviderConfigStore
 from .config.workspace import WorkspaceStore
 from .core.errors import BaiUserError
 from .execution.harness import Harness
+from .execution.scheduler import Scheduler
 
 
 BARE_USAGE = "bai: provide --workspace <name-or-id> and a request, or use 'bai run'."
@@ -50,6 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
     run = subparsers.add_parser("run")
     run.add_argument("--workspace", required=True)
     run.add_argument("--approve-mutation", action="append", default=[])
+    run.add_argument("--background", action="store_true")
     run.add_argument("request")
 
     return parser
@@ -59,16 +61,75 @@ def build_bare_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="bai", add_help=False)
     parser.add_argument("--workspace")
     parser.add_argument("--approve-mutation", action="append", default=[])
+    parser.add_argument("--background", action="store_true")
     parser.add_argument("request", nargs=argparse.REMAINDER)
     return parser
 
 
-def run_harness(workspace_ref: str, request: str, approved_mutation_paths: list[str]) -> int:
-    result = Harness().run(
-        workspace_ref=workspace_ref,
+def run_harness(
+    workspace_ref: str,
+    request: str,
+    approved_mutation_paths: list[str],
+    *,
+    background: bool = False,
+) -> int:
+    workspaces = WorkspaceStore()
+    workspace = workspaces.get(workspace_ref)
+    workspaces.validate(workspace)
+    scheduler = Scheduler(runtime=workspaces.runtime, workspaces=workspaces)
+    if background:
+        scheduler_path = scheduler.defer_background(
+            workspace=workspace,
+            request=request,
+            execution_policy="serial",
+            reason="background requested",
+        )
+        print(
+            json.dumps(
+                {
+                    "status": "deferred",
+                    "background": True,
+                    "workspace_id": workspace.workspace_id,
+                    "scheduler_artifact": str(scheduler_path),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 0
+    scheduler_path = scheduler.admit_foreground(
+        workspace=workspace,
         request=request,
-        approved_mutation_paths=approved_mutation_paths,
+        execution_policy="serial",
+        reason="foreground requested",
     )
+    try:
+        result = Harness(runtime=workspaces.runtime, workspaces=workspaces).run(
+            workspace_ref=workspace_ref,
+            request=request,
+            approved_mutation_paths=approved_mutation_paths,
+        )
+    except USER_FACING_EXCEPTIONS as exc:
+        scheduler.fail_foreground(
+            workspace=workspace,
+            scheduler_path=scheduler_path,
+            failure_reason=str(exc),
+        )
+        raise
+    except Exception as exc:
+        scheduler.fail_foreground(
+            workspace=workspace,
+            scheduler_path=scheduler_path,
+            failure_reason=f"internal error: {type(exc).__name__}",
+        )
+        raise
+    scheduler.complete_foreground(
+        workspace=workspace,
+        scheduler_path=scheduler_path,
+        harness_task_id=str(result["task_id"]),
+        status=str(result["status"]),
+    )
+    result["scheduler_artifact"] = str(scheduler_path)
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0
 
@@ -102,7 +163,12 @@ def main(argv: list[str] | None = None) -> int:
             print(BARE_USAGE, file=sys.stderr)
             return 2
         try:
-            return run_harness(args.workspace, request, args.approve_mutation)
+            return run_harness(
+                args.workspace,
+                request,
+                args.approve_mutation,
+                background=args.background,
+            )
         except USER_FACING_EXCEPTIONS as exc:
             print(f"bai: {exc}", file=sys.stderr)
             return 2
@@ -149,7 +215,12 @@ def main(argv: list[str] | None = None) -> int:
                 print(json.dumps(store.read(), indent=2, sort_keys=True))
                 return 0
         if args.command == "run":
-            return run_harness(args.workspace, args.request, args.approve_mutation)
+            return run_harness(
+                args.workspace,
+                args.request,
+                args.approve_mutation,
+                background=args.background,
+            )
     except USER_FACING_EXCEPTIONS as exc:
         print(f"bai: {exc}", file=sys.stderr)
         return 2

@@ -6,6 +6,10 @@ from pathlib import Path
 import pytest
 
 from bai.artifacts.context import ContextStore
+from bai.artifacts.audit import AuditStore
+from bai.artifacts.fix import FixStore
+from bai.artifacts.task_events import TaskEventStore
+from bai.execution.finalize import finalize_success
 from bai.execution.harness import Harness
 from bai.artifacts.memory import MemoryStore
 from bai.core.policy import PolicyDecision, PolicyEngine
@@ -86,6 +90,107 @@ def test_workflow_write_is_policy_gated(
         )
 
     assert not (runtime.state / "workflows").exists()
+
+
+def test_workflow_checked_path_requires_store_issued_policy_permit(
+    runtime: RuntimePaths, workspace_root: Path
+) -> None:
+    store = WorkspaceStore(runtime)
+    workspace = store.add("demo", workspace_root)
+    workflow_store = WorkflowStore(runtime, PolicyEngine(store))
+    path = runtime.state / "workflows" / "task-1.json"
+
+    with pytest.raises(PermissionError, match="workflow write permit"):
+        workflow_store.write(
+            workspace=workspace,
+            task_id="task-1",
+            checked_path=path,
+            workflow={
+                "execution_policy": "serial",
+                "nodes": [],
+                "edges": [],
+                "artifacts": {},
+                "checkpoints": [],
+                "status": "planned",
+            },
+        )
+
+    assert not path.exists()
+
+
+class FailingMemoryStore(MemoryStore):
+    def write(
+        self,
+        *,
+        workspace: WorkspaceRecord,
+        kind: str,
+        content: dict,
+    ) -> Path:
+        raise PermissionError("memory write failed")
+
+
+def test_finalization_failure_discards_unused_workflow_write_permit(
+    runtime: RuntimePaths, workspace_root: Path
+) -> None:
+    store = WorkspaceStore(runtime)
+    workspace = store.add("demo", workspace_root)
+    policy = PolicyEngine(store)
+    workflow_store = WorkflowStore(runtime, policy)
+    task_id = "task-1"
+    checked_path = runtime.state / "workflows" / f"{task_id}.json"
+
+    with pytest.raises(PermissionError, match="memory write failed"):
+        finalize_success(
+            workspace=workspace,
+            task_id=task_id,
+            request="plan only",
+            execution_policy="serial",
+            workflow_mode="default",
+            agent_output={
+                "id": "plan-1",
+                "model": {"provider": "local", "model": "local-plan-stub"},
+                "proposed_effects": [],
+                "proposed_changes": [],
+                "risks": [],
+                "requested_approval_scope": [],
+            },
+            approval_path=runtime.state / "approvals" / "approval.json",
+            approval_paths=[runtime.state / "approvals" / "approval.json"],
+            mutation_approval_paths=[],
+            context_path=runtime.state / "context" / "context.json",
+            planned_workflow_path=runtime.state / "workflows" / f"{task_id}.json",
+            event_paths=[],
+            inspections=[],
+            test_runs=[],
+            applied_changes=[],
+            denied_changes=[],
+            node_results={
+                "audit": {"findings": []},
+                "fix": {"proposals": []},
+            },
+            events=TaskEventStore(runtime, policy),
+            audits=AuditStore(runtime, policy),
+            fixes=FixStore(runtime, policy),
+            memory=FailingMemoryStore(runtime, policy),
+            workflows=workflow_store,
+        )
+
+    with pytest.raises(PermissionError, match="workflow write permit"):
+        workflow_store.write(
+            workspace=workspace,
+            task_id=task_id,
+            checked_path=checked_path,
+            workflow={
+                "execution_policy": "serial",
+                "nodes": [],
+                "edges": [],
+                "artifacts": {},
+                "checkpoints": [],
+                "status": "completed",
+            },
+        )
+
+    assert not checked_path.exists()
 
 
 def test_context_store_writes_scoped_bundle_without_workspace_crawling(

@@ -114,6 +114,36 @@ class PolicyEngine:
             if not resolved.is_relative_to(context_dir):
                 return PolicyDecision(False, "context writes must stay under runtime context")
             return PolicyDecision(True, "context write accepted")
+        if kind == "audit_write":
+            target = Path(effect["path"])
+            try:
+                resolved = self.workspace_store.runtime.assert_runtime_path(target)
+            except ValueError as exc:
+                return PolicyDecision(False, str(exc))
+            audit_dir = self.workspace_store.runtime.state / "audits"
+            if not resolved.is_relative_to(audit_dir):
+                return PolicyDecision(False, "audit writes must stay under runtime audits")
+            return PolicyDecision(True, "audit write accepted")
+        if kind == "fix_write":
+            target = Path(effect["path"])
+            try:
+                resolved = self.workspace_store.runtime.assert_runtime_path(target)
+            except ValueError as exc:
+                return PolicyDecision(False, str(exc))
+            fix_dir = self.workspace_store.runtime.state / "fixes"
+            if not resolved.is_relative_to(fix_dir):
+                return PolicyDecision(False, "fix writes must stay under runtime fixes")
+            return PolicyDecision(True, "fix write accepted")
+        if kind == "scheduler_write":
+            target = Path(effect["path"])
+            try:
+                resolved = self.workspace_store.runtime.assert_runtime_path(target)
+            except ValueError as exc:
+                return PolicyDecision(False, str(exc))
+            scheduler_dir = self.workspace_store.runtime.state / "scheduler"
+            if not resolved.is_relative_to(scheduler_dir):
+                return PolicyDecision(False, "scheduler writes must stay under runtime scheduler state")
+            return PolicyDecision(True, "scheduler write accepted")
         if kind == "inspect_file":
             inspect_policy = workspace.command_policy.get("inspect", {})
             if inspect_policy.get("allowed") is not True:

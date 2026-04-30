@@ -6,7 +6,9 @@ from pathlib import Path
 from typing import Any
 
 from ..artifacts.approvals import ApprovalStore
+from ..artifacts.audit import AuditStore, build_audit_result
 from ..artifacts.context import ContextStore
+from ..artifacts.fix import FixStore, build_fix_proposals
 from ..artifacts.memory import MemoryStore
 from ..artifacts.task_events import TaskEventStore
 from ..artifacts.workflow import (
@@ -21,6 +23,7 @@ from ..core.policy import PolicyEngine, PolicyEngineInterface
 from ..core.runtime import RuntimePaths
 from .agent import PlanAgent
 from .effects import EffectExecutor, INSPECTION_PREVIEW_CHARS
+from .finalize import apply_audit_result, audit_source_artifacts, finalize_success
 from .test_command import TestCommandExecutor
 
 EXPECTED_RUN_FAILURES = (
@@ -43,6 +46,8 @@ class Harness:
         memory: MemoryStore | None = None,
         events: TaskEventStore | None = None,
         approvals: ApprovalStore | None = None,
+        audits: AuditStore | None = None,
+        fixes: FixStore | None = None,
         context: ContextStore | None = None,
         workflows: WorkflowStore | None = None,
         effects: EffectExecutor | None = None,
@@ -56,6 +61,8 @@ class Harness:
         self.memory = memory or MemoryStore(self.runtime, self.policy)  # type: ignore[arg-type]
         self.events = events or TaskEventStore(self.runtime, self.policy)  # type: ignore[arg-type]
         self.approvals = approvals or ApprovalStore(self.runtime, self.policy)  # type: ignore[arg-type]
+        self.audits = audits or AuditStore(self.runtime, self.policy)  # type: ignore[arg-type]
+        self.fixes = fixes or FixStore(self.runtime, self.policy)  # type: ignore[arg-type]
         self.context = context or ContextStore(self.runtime, self.policy)  # type: ignore[arg-type]
         self.workflows = workflows or WorkflowStore(self.runtime, self.policy)  # type: ignore[arg-type]
         self.effects = effects or EffectExecutor(
@@ -85,6 +92,8 @@ class Harness:
         test_runs: list[dict[str, Any]] = []
         applied_changes: list[dict[str, str]] = []
         denied_changes: list[dict[str, str]] = []
+        audit_path: Path | None = None
+        fix_path: Path | None = None
         if execution_policy != "serial":
             raise ValueError("phase one defaults to serial and accepts only serial execution")
         workspace = self.workspaces.get(workspace_ref)
@@ -196,61 +205,29 @@ class Harness:
                 applied_changes=applied_changes,
                 denied_changes=denied_changes,
             )
-            audit_findings = node_results["audit"]["findings"]
-            fix_proposals = node_results["fix"]["proposals"]
-            memory_path = self.memory.write(
-                workspace=workspace,
-                kind="session",
-                content={"request": request, "plan_id": execution_agent_output["id"]},
-            )
-            working_memory_path = self.memory.write(
-                workspace=workspace,
-                kind="working",
-                content={
-                    "plan_id": execution_agent_output["id"],
-                    "task_id": task_id,
-                    "workspace_id": workspace.workspace_id,
-                    "workflow_mode": workflow_mode,
-                    "risks": execution_agent_output.get("risks", []),
-                    "requested_approval_scope": execution_agent_output.get(
-                        "requested_approval_scope", []
-                    ),
-                    "workflow_artifact": str(workflow_path),
-                    "approval_artifacts": [str(path) for path in approval_paths],
-                },
-            )
-            memory_paths = [memory_path, working_memory_path]
-            workflow_status = "completed_with_denials" if denied_changes else "completed"
-            event_paths.append(
-                self.events.write(
-                    workspace=workspace,
-                    task_id=task_id,
-                    event_type="completed",
-                    reason="run completed",
-                    checkpoint_ref=str(approval_path),
-                )
-            )
-            workflow_path = self.workflows.write(
+            finalized = finalize_success(
                 workspace=workspace,
                 task_id=task_id,
-                workflow=build_phase_one_workflow(
-                    workspace=workspace,
-                    execution_policy=execution_policy,
-                    agent_output=execution_agent_output,
-                    context_path=context_path,
-                    approval_paths=approval_paths,
-                    mutation_approval_paths=mutation_approval_paths,
-                    event_paths=event_paths,
-                    memory_paths=memory_paths,
-                    inspections=inspections,
-                    test_runs=test_runs,
-                    applied_changes=applied_changes,
-                    denied_changes=denied_changes,
-                    status=workflow_status,
-                    node_results=node_results,
-                    audit_findings=audit_findings,
-                    fix_proposals=fix_proposals,
-                ),
+                request=request,
+                execution_policy=execution_policy,
+                workflow_mode=workflow_mode,
+                agent_output=execution_agent_output,
+                approval_path=approval_path,
+                context_path=context_path,
+                planned_workflow_path=workflow_path,
+                approval_paths=approval_paths,
+                mutation_approval_paths=mutation_approval_paths,
+                event_paths=event_paths,
+                inspections=inspections,
+                test_runs=test_runs,
+                applied_changes=applied_changes,
+                denied_changes=denied_changes,
+                node_results=node_results,
+                events=self.events,
+                audits=self.audits,
+                fixes=self.fixes,
+                memory=self.memory,
+                workflows=self.workflows,
             )
             return {
                 "status": "completed_with_denials" if denied_changes else "success",
@@ -260,21 +237,27 @@ class Harness:
                 "workflow_mode": workflow_mode,
                 "model": execution_agent_output["model"],
                 "plan": execution_agent_output,
-                "workflow_artifact": str(workflow_path),
+                "workflow_artifact": str(finalized["workflow_path"]),
                 "context_artifact": str(context_path),
                 "approval_artifact": str(approval_path),
                 "approval_artifacts": [str(path) for path in approval_paths],
-                "memory_artifact": str(memory_path),
-                "working_memory_artifact": str(working_memory_path),
-                "memory_artifacts": [str(path) for path in memory_paths],
-                "event_artifacts": [str(path) for path in event_paths],
+                "memory_artifact": str(finalized["memory_path"]),
+                "working_memory_artifact": str(finalized["working_memory_path"]),
+                "memory_artifacts": [str(path) for path in finalized["memory_paths"]],
+                "audit_artifact": (
+                    str(finalized["audit_path"]) if finalized["audit_path"] else None
+                ),
+                "fix_artifact": (
+                    str(finalized["fix_path"]) if finalized["fix_path"] else None
+                ),
+                "event_artifacts": [str(path) for path in finalized["event_paths"]],
                 "applied_changes": applied_changes,
                 "denied_changes": denied_changes,
                 "inspections": inspections,
                 "test_runs": test_runs,
-                "node_results": node_results,
-                "audit_findings": audit_findings,
-                "fix_proposals": fix_proposals,
+                "node_results": finalized["node_results"],
+                "audit_findings": finalized["audit_findings"],
+                "fix_proposals": finalized["fix_proposals"],
             }
         except EXPECTED_RUN_FAILURES as exc:
             try:
@@ -300,6 +283,45 @@ class Harness:
                             terminal_approval_paths.append(path)
                     workflow_kwargs: dict[str, Any] = {}
                     if execution_agent_output.get("workflow_mode") == "dev":
+                        audit_result = build_audit_result(
+                            agent_output=execution_agent_output,
+                            applied_changes=applied_changes,
+                            denied_changes=denied_changes,
+                            inspections=inspections,
+                            test_runs=test_runs,
+                            workflow_status="failed",
+                            failure_reason=str(exc),
+                        )
+                        try:
+                            audit_path = self.audits.write(
+                                workspace=workspace,
+                                task_id=task_id,
+                                audit_result=audit_result,
+                                source_artifacts=audit_source_artifacts(
+                                    context_path=context_path,
+                                    approval_paths=terminal_approval_paths,
+                                    event_paths=event_paths,
+                                    mutation_approval_paths=mutation_approval_paths,
+                                    workflow_path=None,
+                                ),
+                            )
+                        except Exception as audit_exc:
+                            exc.add_note(f"failed audit write failed: {audit_exc}")
+                        fix_proposals = (
+                            build_fix_proposals(audit_result["findings"])
+                            if audit_path is not None
+                            else []
+                        )
+                        if fix_proposals and audit_path is not None:
+                            try:
+                                fix_path = self.fixes.write(
+                                    workspace=workspace,
+                                    task_id=task_id,
+                                    proposals=fix_proposals,
+                                    source_audit_artifact=str(audit_path),
+                                )
+                            except Exception as fix_exc:
+                                exc.add_note(f"failed fix write failed: {fix_exc}")
                         node_results = developer_node_results(
                             agent_output=execution_agent_output,
                             test_runs=test_runs,
@@ -307,10 +329,18 @@ class Harness:
                             denied_changes=denied_changes,
                             failure_reason=str(exc),
                         )
+                        apply_audit_result(
+                            node_results=node_results,
+                            audit_result=audit_result,
+                            fix_proposals=fix_proposals,
+                            fix_path=fix_path,
+                        )
                         workflow_kwargs = {
+                            "audit_path": audit_path,
+                            "fix_path": fix_path,
                             "node_results": node_results,
-                            "audit_findings": [],
-                            "fix_proposals": [],
+                            "audit_findings": audit_result["findings"],
+                            "fix_proposals": fix_proposals,
                         }
                     self.workflows.write(
                         workspace=workspace,

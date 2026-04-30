@@ -33,6 +33,8 @@ def build_phase_one_workflow(
     applied_changes: list[dict[str, str]],
     denied_changes: list[dict[str, str]],
     status: str,
+    audit_path: Path | None = None,
+    fix_path: Path | None = None,
     node_results: dict[str, Any] | None = None,
     audit_findings: list[dict[str, Any]] | None = None,
     fix_proposals: list[dict[str, Any]] | None = None,
@@ -50,6 +52,8 @@ def build_phase_one_workflow(
             applied_changes=applied_changes,
             denied_changes=denied_changes,
             status=status,
+            audit_path=audit_path,
+            fix_path=fix_path,
             node_results=node_results or developer_node_results(
                 agent_output=agent_output,
                 test_runs=test_runs,
@@ -182,6 +186,8 @@ def build_developer_workflow(
     applied_changes: list[dict[str, str]],
     denied_changes: list[dict[str, str]],
     status: str,
+    audit_path: Path | None,
+    fix_path: Path | None,
     node_results: dict[str, Any],
     audit_findings: list[dict[str, Any]] | None = None,
     fix_proposals: list[dict[str, Any]] | None = None,
@@ -254,24 +260,29 @@ def build_developer_workflow(
         {"from": "test", "to": "audit"},
         {"from": "audit", "to": "fix"},
     ]
+    artifacts = {
+        "context_artifact": str(context_path),
+        "approval_artifacts": [str(path) for path in approval_paths],
+        "event_artifacts": [str(path) for path in event_paths],
+        "memory_artifacts": [str(path) for path in memory_paths],
+        "inspections": inspections,
+        "test_runs": test_runs,
+        "applied_changes": applied_changes,
+        "denied_changes": denied_changes,
+        "node_results": node_results,
+        "audit_findings": findings,
+        "fix_proposals": fixes,
+    }
+    if audit_path is not None:
+        artifacts["audit_artifact"] = str(audit_path)
+    if fix_path is not None:
+        artifacts["fix_artifact"] = str(fix_path)
     return {
         "workflow_mode": "dev",
         "execution_policy": execution_policy,
         "nodes": nodes,
         "edges": edges,
-        "artifacts": {
-            "context_artifact": str(context_path),
-            "approval_artifacts": [str(path) for path in approval_paths],
-            "event_artifacts": [str(path) for path in event_paths],
-            "memory_artifacts": [str(path) for path in memory_paths],
-            "inspections": inspections,
-            "test_runs": test_runs,
-            "applied_changes": applied_changes,
-            "denied_changes": denied_changes,
-            "node_results": node_results,
-            "audit_findings": findings,
-            "fix_proposals": fixes,
-        },
+        "artifacts": artifacts,
         "checkpoints": [str(path) for path in approval_paths],
         "status": status,
     }
@@ -365,6 +376,7 @@ class WorkflowStore:
     ) -> None:
         self.runtime = runtime or RuntimePaths.discover()
         self.policy = policy or PolicyEngine()
+        self._checked_writes: set[tuple[str, str, Path]] = set()
 
     def write(
         self,
@@ -372,14 +384,19 @@ class WorkflowStore:
         workspace: WorkspaceRecord,
         task_id: str,
         workflow: dict[str, Any],
+        checked_path: Path | None = None,
     ) -> Path:
-        path = self.runtime.state / "workflows" / f"{task_id}.json"
-        decision = self.policy.gate_effect(
-            workspace=workspace,
-            effect={"kind": "workflow_write", "path": str(path)},
-        )
-        if not decision.allowed:
-            raise PermissionError(decision.reason)
+        if checked_path is None:
+            path = self._gate_write_path(workspace=workspace, task_id=task_id)
+        else:
+            path = Path(checked_path)
+            expected_path = self._workflow_path(task_id)
+            if path != expected_path:
+                raise PermissionError("workflow write permit path mismatch")
+            permit = (workspace.workspace_id, task_id, path)
+            if permit not in self._checked_writes:
+                raise PermissionError("workflow write permit missing")
+            self._checked_writes.remove(permit)
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "task_id": task_id,
@@ -398,3 +415,30 @@ class WorkflowStore:
         }
         atomic_write_text(path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
         return path
+
+    def check_write_allowed(self, *, workspace: WorkspaceRecord, task_id: str) -> Path:
+        path = self._gate_write_path(workspace=workspace, task_id=task_id)
+        self._checked_writes.add((workspace.workspace_id, task_id, path))
+        return path
+
+    def discard_write_permit(
+        self,
+        *,
+        workspace: WorkspaceRecord,
+        task_id: str,
+        path: Path,
+    ) -> None:
+        self._checked_writes.discard((workspace.workspace_id, task_id, Path(path)))
+
+    def _gate_write_path(self, *, workspace: WorkspaceRecord, task_id: str) -> Path:
+        path = self._workflow_path(task_id)
+        decision = self.policy.gate_effect(
+            workspace=workspace,
+            effect={"kind": "workflow_write", "path": str(path)},
+        )
+        if not decision.allowed:
+            raise PermissionError(decision.reason)
+        return path
+
+    def _workflow_path(self, task_id: str) -> Path:
+        return self.runtime.state / "workflows" / f"{task_id}.json"

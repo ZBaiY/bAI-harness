@@ -285,10 +285,21 @@ def test_minimal_memory_write_boundaries(
         memory.write(workspace=record, kind="long_term", content={})
 
 
-def test_toy_scheduler_pause_transition() -> None:
-    scheduler = Scheduler()
-    task = scheduler.start_toy_task("toy-1", "background indexing placeholder")
+def test_scheduler_background_metadata_is_preemptible(
+    runtime: RuntimePaths, workspace_root: Path
+) -> None:
+    store = WorkspaceStore(runtime)
+    workspace = store.add("demo", workspace_root)
+    scheduler = Scheduler(runtime=runtime, workspaces=store, policy=PolicyEngine(store))
 
-    assert task.status == "running"
-    scheduler.pause(task)
-    assert task.status == "paused"
+    path = scheduler.defer_background(
+        workspace=workspace,
+        request="dev plan only",
+        execution_policy="serial",
+        reason="background requested",
+    )
+
+    record = json.loads(path.read_text())
+    assert record["lifecycle_status"] == "deferred"
+    assert record["preemptible"] is True
+    assert record["execution_state"] == "deferred_metadata_only"

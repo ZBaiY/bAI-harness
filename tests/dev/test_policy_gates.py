@@ -185,8 +185,9 @@ def test_policy_gate_runs_for_unapproved_mutation_proposal(
             "agent_output",
             "effect:approval_write",
             "effect:code_mutation",
-            "effect:memory_write",
             "effect:task_event_write",
+            "effect:workflow_write",
+            "effect:memory_write",
         ],
     )
     assert not target.exists()

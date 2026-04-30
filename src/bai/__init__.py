@@ -12,9 +12,11 @@ __version__ = "0.1.0"
 _LEGACY_MODULES = {
     "agent": "bai.execution.agent",
     "approvals": "bai.artifacts.approvals",
+    "audit": "bai.artifacts.audit",
     "context": "bai.artifacts.context",
     "effects": "bai.execution.effects",
     "errors": "bai.core.errors",
+    "fix": "bai.artifacts.fix",
     "harness": "bai.execution.harness",
     "io": "bai.core.io",
     "memory": "bai.artifacts.memory",

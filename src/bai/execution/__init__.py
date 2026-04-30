@@ -1,2 +1,1 @@
-"""Harness execution, effects, and toy scheduler components."""
-
+"""Harness execution, effects, and scheduler artifact components."""

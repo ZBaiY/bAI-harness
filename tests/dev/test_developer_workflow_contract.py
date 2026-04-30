@@ -76,9 +76,15 @@ def test_dev_workflow_node_semantics_without_effects(
     assert node_results["code"]["status"] == "skipped"
     assert node_results["doc"]["status"] == "proposal_only"
     assert node_results["test"]["status"] == "skipped"
-    assert node_results["audit"]["status"] == "completed"
+    assert node_results["audit"]["status"] == "passed_with_notes"
     assert node_results["fix"]["status"] == "skipped"
-    assert result["audit_findings"] == []
+    assert result["audit_findings"] == [
+        {
+            "severity": "info",
+            "code": "no_test_command",
+            "message": "no trusted test command ran",
+        }
+    ]
     assert result["fix_proposals"] == []
 
 
@@ -101,10 +107,16 @@ def test_dev_workflow_missing_mutation_approval_is_explicit_denial(
     assert not target.exists()
     assert result["node_results"]["code"]["status"] == "denied"
     assert result["node_results"]["fix"]["status"] == "proposal_only"
+    assert result["fix_artifact"] is not None
     assert result["fix_proposals"] == [
         {
             "status": "proposal_only",
-            "reason": "manual intervention required for audit findings",
+            "kind": "request_mutation_approval",
+            "message": "request approval for denied mutation path",
+            "path": str(target.resolve()),
+            "operation": "create",
+            "source_finding_code": "mutation_denied",
+            "auto_apply": False,
         }
     ]
 
@@ -135,9 +147,15 @@ def test_dev_workflow_approved_mutation_runs_before_test_and_audit(
     assert result["test_runs"][0]["stdout_preview"] == "tested\n"
     assert result["node_results"]["code"]["status"] == "completed"
     assert result["node_results"]["test"]["status"] == "completed"
-    assert result["node_results"]["audit"]["status"] == "completed"
+    assert result["node_results"]["audit"]["status"] == "passed_with_notes"
     assert result["node_results"]["fix"]["status"] == "skipped"
-    assert result["audit_findings"] == []
+    assert result["audit_findings"] == [
+        {
+            "severity": "info",
+            "code": "trusted_test_command_no_sandbox",
+            "message": "test command ran as trusted direct execution without a write sandbox",
+        }
+    ]
 
 
 def test_dev_workflow_failed_test_records_failed_node_without_memory_or_fix(
@@ -166,6 +184,13 @@ def test_dev_workflow_failed_test_records_failed_node_without_memory_or_fix(
     ]
     assert workflow["status"] == "failed"
     assert node_results["test"]["status"] == "failed"
-    assert node_results["fix"]["status"] == "skipped"
-    assert workflow["artifacts"]["fix_proposals"] == []
+    assert node_results["audit"]["status"] == "failed"
+    assert node_results["fix"]["status"] == "proposal_only"
+    assert "audit_artifact" in workflow["artifacts"]
+    assert "fix_artifact" in workflow["artifacts"]
+    audit = read_json(workflow["artifacts"]["audit_artifact"])
+    fix = read_json(workflow["artifacts"]["fix_artifact"])
+    assert audit["status"] == "failed"
+    assert audit["findings"] == workflow["artifacts"]["audit_findings"]
+    assert fix["proposals"] == workflow["artifacts"]["fix_proposals"]
     assert not (runtime.memory / workspace.workspace_id).exists()

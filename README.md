@@ -49,6 +49,7 @@ bai --workspace demo "plan only"
 bai run --workspace demo "inspect README.md"
 bai run --workspace demo "test python3 -m pytest -q"
 bai run --workspace demo "dev plan only"
+bai run --workspace demo --background "dev plan only"
 ```
 
 Phase one defaults to serial execution, routes to a local model stub, records a
@@ -66,6 +67,11 @@ Successful run JSON includes the phase-one artifact boundary:
 - `task_id`, `execution_policy`, `workspace_id`, `model`, and `plan`
 - `workflow_artifact` under `~/.bai/state/workflows/`
 - `context_artifact` under `~/.bai/state/context/`
+- `audit_artifact` under `~/.bai/state/audits/` for developer workflows
+- `fix_artifact` under `~/.bai/state/fixes/` for actionable developer-workflow
+  audit findings
+- `scheduler_artifact` under `~/.bai/state/scheduler/` for foreground
+  admission or deferred background metadata
 - `approval_artifact` and `approval_artifacts`
 - `event_artifacts`
 - `memory_artifact`, `working_memory_artifact`, and `memory_artifacts`
@@ -84,8 +90,20 @@ contract, not an autonomous loop. The `code` node may contain bounded mutation
 proposals, but mutations still require explicit approval. The `doc` and `fix`
 nodes are proposal-only in phase one. The `test` node may run only through the
 existing trusted `test <argv...>` path when configured. The `audit` node is
-read-only and records deterministic findings from the current run state. Fixes
-are never auto-applied.
+read-only and records a JSON audit artifact under `~/.bai/state/audits/`.
+Audit findings are deterministic and use only current run metadata already
+held by Harness: agent output, applied or denied changes, explicit inspection
+results, trusted test command results, workflow status, and trusted test
+write-enforcement metadata. Audit does not crawl workspace files, call models,
+run commands, or mutate state outside its runtime artifact. Fixes are never
+auto-applied.
+
+When audit findings are actionable, the fix node writes a proposal-only JSON
+artifact under `~/.bai/state/fixes/`. Phase-one fix proposals are deterministic
+data derived only from audit findings, such as requesting approval for a denied
+mutation path or manually reviewing failing test output. Fix artifacts do not
+contain generated patches, commands to run automatically, or any execution
+authority. Info-only audit findings do not create a fix artifact.
 
 The context artifact records the scoped bundle used for the plan agent:
 request text, workspace metadata, serial execution policy, local router
@@ -114,10 +132,15 @@ platform supports it.
 Each Harness run gets a `task_id` and writes structured task events under
 `~/.bai/state/events/`, including `started` and either `completed` or `failed`.
 
-The toy scheduler remains component-only scaffolding. It can record a
-cooperative `running` -> `pause_requested` -> `paused` transition for one
-background placeholder task, but there is no daemon, queue persistence, or
-background command runner.
+The scheduler remains artifact-only scaffolding. CLI `run --background` records
+deferred, preemptible background metadata under runtime scheduler state and
+exits without executing Harness effects, writing memory, or starting a worker.
+Foreground `bai run` remains serial and records foreground admission metadata;
+if deferred background work exists for the workspace, the scheduler artifact
+makes foreground priority explicit. Foreground scheduler artifacts are
+reconciled to `completed` or `failed` after Harness returns. There is no daemon,
+queue persistence, parallel execution engine, event bus, or background command
+runner.
 
 `inspect <path>` is a narrow read-only file inspection path. Paths are resolved
 against the configured workspace root and must remain inside the workspace's
