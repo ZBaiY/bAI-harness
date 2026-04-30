@@ -1,3 +1,10 @@
+"""Workflow DAG artifact builders and persistence for phase-one runs.
+
+The workflow artifact records the serial DAG contract that Harness actually
+orchestrates. It is not a workflow engine: no scheduler, agent loop, retry
+logic, or parallel execution is implemented here.
+"""
+
 from __future__ import annotations
 
 import json
@@ -389,6 +396,9 @@ class WorkflowStore:
         if checked_path is None:
             path = self._gate_write_path(workspace=workspace, task_id=task_id)
         else:
+            # Checked writes consume a permit issued by check_write_allowed(). A raw Path is
+            # not enough because that would let callers bypass the policy gate embedded in
+            # the store boundary.
             path = Path(checked_path)
             expected_path = self._workflow_path(task_id)
             if path != expected_path:
@@ -418,6 +428,8 @@ class WorkflowStore:
 
     def check_write_allowed(self, *, workspace: WorkspaceRecord, task_id: str) -> Path:
         path = self._gate_write_path(workspace=workspace, task_id=task_id)
+        # The permit lets finalization preflight policy before writing memory. It is one-use
+        # and must be discarded if finalization fails before the workflow write consumes it.
         self._checked_writes.add((workspace.workspace_id, task_id, path))
         return path
 

@@ -1,3 +1,10 @@
+"""Approval artifact persistence for phase-one checkpoints.
+
+Approval records are runtime-state artifacts under BAI_HOME. They document that
+Harness accepted an agent output or a specific mutation approval scope; they do
+not represent task completion or successful effect execution.
+"""
+
 from __future__ import annotations
 
 import json

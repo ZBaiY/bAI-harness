@@ -1,3 +1,10 @@
+"""Minimal session and working memory artifact store.
+
+Phase one supports only session and working memory under BAI_HOME. There is no
+long-term store, indexing, summarization, retrieval, or background memory
+consolidation in this module.
+"""
+
 from __future__ import annotations
 
 import json

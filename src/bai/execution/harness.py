@@ -1,3 +1,10 @@
+"""Serial phase-one Harness orchestration for one bounded user request.
+
+Harness is the lifecycle owner for a foreground run: resolve workspace, route
+locally, invoke the stateless agent, gate output, execute narrow effects, and
+delegate success/failure artifact finalization. It is not a workflow engine.
+"""
+
 from __future__ import annotations
 
 import copy
@@ -99,6 +106,8 @@ class Harness:
         workspace = self.workspaces.get(workspace_ref)
         self.workspaces.validate(workspace)
         try:
+            # The started event is the first durable run artifact after workspace validation.
+            # Failures before this point have no trusted workspace/task context to attach to.
             event_paths.append(
                 self.events.write(
                     workspace=workspace,
@@ -129,12 +138,17 @@ class Harness:
                 execution_policy=execution_policy,
                 model_route=model_route,
             )
+            # Freeze separate views so policy validation cannot be bypassed by later mutation.
+            # The policy copy is the contract that was accepted; the execution copy is what
+            # downstream components read after that acceptance.
             policy_agent_output = copy.deepcopy(agent_output)
             execution_agent_output = copy.deepcopy(agent_output)
             workflow_mode = execution_agent_output.get("workflow_mode", "default")
             output_decision = self.policy.gate_agent_output(policy_agent_output)
             if not output_decision.allowed:
                 raise PermissionError(output_decision.reason)
+            # This approval records agent-output acceptance only. It must not be read as
+            # task completion; completed/failed task events are the terminal lifecycle source.
             approval_path = self._record_agent_output_acceptance(
                 workspace=workspace,
                 task_id=task_id,
@@ -164,6 +178,8 @@ class Harness:
                 workspace=workspace,
                 proposed_effects=execution_agent_output.get("proposed_effects", []),
             )
+            # Dev workflow keeps code before tests to model plan->code->doc->test->audit->fix.
+            # This is still serial execution: the DAG shape is an artifact contract, not fan-out.
             if workflow_mode == "dev":
                 (
                     applied_changes,
@@ -205,6 +221,9 @@ class Harness:
                 applied_changes=applied_changes,
                 denied_changes=denied_changes,
             )
+            # Success finalization owns terminal event, audit/fix, memory, and final workflow order.
+            # Keeping that sequence in one helper prevents memory from being committed before
+            # the terminal workflow can bind it.
             finalized = finalize_success(
                 workspace=workspace,
                 task_id=task_id,
@@ -261,6 +280,9 @@ class Harness:
             }
         except EXPECTED_RUN_FAILURES as exc:
             try:
+                # Expected run failures still get failed lifecycle evidence when possible.
+                # Secondary artifact failures are attached as notes so the original user-facing
+                # failure remains the exception that callers observe.
                 event_paths.append(
                     self.events.write(
                         workspace=workspace,

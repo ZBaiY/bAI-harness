@@ -1,3 +1,10 @@
+"""Deterministic phase-one PolicyEngine gates for agent output and effects.
+
+PolicyEngine is not an agent, an LLM, or a workflow step. It is the deterministic
+non-bypassable boundary that validates agent output and every phase-one effect
+immediately before the owning component writes, reads, runs, or mutates.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -65,6 +72,9 @@ class PolicyEngine:
         approved: bool = False,
     ) -> PolicyDecision:
         kind = effect.get("kind")
+        # Runtime artifact effects are constrained to their owned BAI_HOME subtrees.
+        # This keeps approvals, memory, task events, workflows, audits, fixes, and scheduler
+        # records from being redirected into workspaces or the source checkout.
         if kind == "approval_write":
             target = Path(effect["path"])
             try:
@@ -155,6 +165,9 @@ class PolicyEngine:
         if kind == "test_command":
             return self._gate_test_command(workspace=workspace, effect=effect)
         if kind == "code_mutation":
+            # Mutation effects require both explicit approval and workspace containment.
+            # The effect gate does not write; it establishes that the later mutation adapter
+            # may inspect preimage and attempt the approved operation.
             if not approved:
                 return PolicyDecision(False, "mutation requires harness approval")
             if effect.get("operation") not in {"create", "modify"}:
@@ -196,6 +209,9 @@ class PolicyEngine:
         ):
             return PolicyDecision(False, "test writable paths must be a JSON array")
         for raw_path in writable_paths:
+            # This checks declaration scope only; execution remains trusted direct execution.
+            # The subprocess adapter cannot enforce filesystem confinement in phase one, so
+            # command approval is treated as trust in the exact argv/prefix.
             target = Path(raw_path).expanduser().resolve()
             if not any(
                 target == approved or target.is_relative_to(approved)

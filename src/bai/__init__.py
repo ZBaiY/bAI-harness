@@ -1,4 +1,9 @@
-"""Minimal bAI phase-one runtime."""
+"""Minimal bAI phase-one runtime package.
+
+The public package exposes the organized implementation while preserving a few
+legacy module aliases used by earlier tests and callers. Runtime state remains
+external to this source tree under BAI_HOME or ~/.bai.
+"""
 
 from __future__ import annotations
 

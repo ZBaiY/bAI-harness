@@ -1,3 +1,10 @@
+"""Proposal-only fix artifact builder and store.
+
+Fix artifacts are deterministic suggestions derived from audit findings. They
+do not contain patches, commands to run, approval authority, or any mechanism to
+apply changes automatically.
+"""
+
 from __future__ import annotations
 
 import json

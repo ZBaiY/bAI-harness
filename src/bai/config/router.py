@@ -1,3 +1,10 @@
+"""Local-only provider configuration and deterministic route selection.
+
+Router chooses a model route from BAI_HOME provider config or the built-in
+local stub. It never inspects prompts, memory, or workspace files, and it does
+not perform network health checks or cloud fallback.
+"""
+
 from __future__ import annotations
 
 import json
@@ -9,6 +16,7 @@ from urllib.parse import urlparse
 from ..core.errors import BaiUserError
 from ..core.io import atomic_write_text
 from ..core.runtime import RuntimePaths
+
 
 @dataclass(frozen=True)
 class ModelRoute:
@@ -90,6 +98,9 @@ class Router:
         local = config.get("providers", {}).get("local", DEFAULT_PROVIDER_CONFIG["providers"]["local"])
         if local.get("provider") != "local":
             raise ProviderConfigError("local provider config is invalid")
+        # Router is local-only in phase one; no network fallback or health check is attempted.
+        # Provider allowance narrows what config may select; it never expands workspace network
+        # policy or inspects task context.
         if local.get("network_required") is not False:
             raise ProviderConfigError("local provider must not require network")
         endpoint = str(local.get("endpoint", ""))
@@ -111,6 +122,9 @@ def _is_local_endpoint(endpoint: str) -> bool:
     parsed = urlparse(endpoint)
     if parsed.scheme in {"stub", "local", "file"}:
         return True
+    # Hostname must parse exactly as local; prefix matches such as localhost.evil are denied.
+    # These URLs may still use a local socket, so callers should treat them as local-only
+    # endpoints rather than cloud/network provider access.
     if parsed.scheme == "http" and parsed.hostname in {"127.0.0.1", "localhost"}:
         return True
     return False

@@ -1,3 +1,10 @@
+"""Runtime path discovery and BAI_HOME directory layout.
+
+RuntimePaths centralizes the BAI_HOME layout so config, state, memory, logs,
+cache, and sandbox files do not drift into the source checkout or registered
+workspace roots.
+"""
+
 from __future__ import annotations
 
 import os

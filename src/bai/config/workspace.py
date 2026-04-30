@@ -1,3 +1,10 @@
+"""Runtime-owned explicit workspace configuration store.
+
+Workspaces are explicit records under BAI_HOME/config. This module owns
+canonical path validation, conservative command-policy defaults, and the small
+name index used for CLI convenience.
+"""
+
 from __future__ import annotations
 
 import hashlib

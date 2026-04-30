@@ -1,3 +1,10 @@
+"""Structured task lifecycle event artifact store.
+
+Task events are append-style JSON lifecycle markers such as started, completed,
+and failed. They provide completion evidence independently from approval
+records, which only prove acceptance of a checkpoint or scope.
+"""
+
 from __future__ import annotations
 
 import json

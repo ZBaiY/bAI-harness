@@ -1,3 +1,10 @@
+"""Deterministic stateless phase-one plan agent.
+
+The agent is a parser-shaped stub that emits bounded plans and explicit effect
+proposals. It has no identity, private memory, delegation, model calls, or
+autonomous control loop.
+"""
+
 from __future__ import annotations
 
 import shlex

@@ -1,3 +1,10 @@
+"""Small filesystem helpers for atomic JSON/text artifact writes.
+
+Artifact stores use these helpers to avoid partial JSON files where practical.
+They deliberately stay small and local: no lock manager, transaction log, or
+cross-process persistence framework is introduced here.
+"""
+
 from __future__ import annotations
 
 import errno

@@ -1,3 +1,10 @@
+"""Deterministic read-only audit artifact builder and store.
+
+The audit slice summarizes current-run metadata already held by Harness. It
+does not crawl workspace files, call models, run commands, or create mutation
+authority; findings are small JSON facts for later human review.
+"""
+
 from __future__ import annotations
 
 import json

@@ -1,3 +1,10 @@
+"""Policy-gated execution adapters for inspect, test, and mutation effects.
+
+EffectExecutor owns the actual filesystem/subprocess mutation boundary. Every
+effect is checked by PolicyEngine before the corresponding read, command, or
+write, and mutations also require approval and preimage binding.
+"""
+
 from __future__ import annotations
 
 import contextlib
@@ -49,6 +56,9 @@ class EffectExecutor:
             if effect.get("kind") != "inspect_file":
                 continue
             target = self._resolve_workspace_path(workspace, effect["path"])
+            # Inspection is read-only, but still gated before any filesystem touch. This
+            # prevents path escapes, missing policy state, or disabled inspect policy from
+            # becoming observable through exists()/is_file()/open() calls.
             decision = self.policy.gate_effect(
                 workspace=workspace,
                 effect={"kind": "inspect_file", "path": str(target)},
@@ -84,6 +94,9 @@ class EffectExecutor:
                 continue
             argv = list(effect["argv"])
             cwd = Path(workspace.root_path).expanduser().resolve()
+            # Writable paths are declared policy metadata, not an OS-level sandbox. The
+            # approved argv is therefore trusted direct execution, and the result records
+            # trusted_command_no_sandbox so callers do not infer confinement.
             declared_writable_paths = [
                 str(Path(path).expanduser().resolve())
                 for path in effect.get(
@@ -108,6 +121,8 @@ class EffectExecutor:
             )
             test_runs.append(result)
             if result["exit_code"] != 0:
+                # Nonzero tests fail the run so success memory is not written. Failed-event
+                # recovery happens in Harness, where task lifecycle context is available.
                 raise BaiUserError(
                     f"test command failed with exit code {result['exit_code']}"
                 )
@@ -134,6 +149,8 @@ class EffectExecutor:
             operation = str(change["operation"])
             content = str(change.get("content", ""))
             content_sha256 = hashlib.sha256(content.encode("utf-8")).hexdigest()
+            # Policy must approve the exact target before preimage reads or mutation locks.
+            # Even approved CLI paths are rechecked here so out-of-scope files are not probed.
             decision = self.policy.gate_effect(
                 workspace=workspace,
                 effect={
@@ -156,6 +173,9 @@ class EffectExecutor:
                 )
                 continue
             with self.mutation_guard(target):
+                # Approval is bound to the current preimage immediately before the write.
+                # The later preimage check catches changes between approval artifact creation
+                # and atomic replacement/link.
                 expected_preimage = self.file_preimage(target)
                 self._validate_mutation_preimage(
                     operation=operation,
@@ -193,6 +213,8 @@ class EffectExecutor:
         lock_name = hashlib.sha256(str(target).encode("utf-8")).hexdigest() + ".lock"
         lock_path = lock_dir / lock_name
         if fcntl is None:
+            # Portable fallback: exclusive directory creation represents the lock. It is
+            # intentionally local and stale locks are surfaced to the user, not auto-expired.
             directory_lock = lock_dir / f"{lock_name}.d"
             try:
                 directory_lock.mkdir()
@@ -243,6 +265,9 @@ class EffectExecutor:
         target.parent.mkdir(parents=True, exist_ok=True)
         temp_path = write_temp_text(target.parent, target.name, content)
         try:
+            # Recheck preimage inside the guarded write boundary to catch races. If another
+            # process changed the target after approval, this mutation no longer matches its
+            # approval scope and must fail.
             if self.file_preimage(target) != expected_preimage:
                 raise PermissionError("mutation target changed after approval")
             if operation == "create":

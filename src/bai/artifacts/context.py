@@ -1,3 +1,10 @@
+"""Scoped context bundle persistence for plan-agent runs.
+
+Context artifacts capture only the request, workspace metadata, serial
+execution policy, router constraints, and explicitly approved memory snippets.
+They intentionally avoid retrieval, workspace crawling, and file contents.
+"""
+
 from __future__ import annotations
 
 import json

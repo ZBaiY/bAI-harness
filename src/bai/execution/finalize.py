@@ -1,3 +1,10 @@
+"""Success-path finalization for events, audit/fix, memory, and workflow state.
+
+This module keeps Harness from owning all terminal ordering details. It writes
+terminal evidence before success memory and ensures unused workflow permits or
+partial memory artifacts are cleaned up if finalization fails.
+"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -38,6 +45,8 @@ def finalize_success(
 ) -> dict[str, Any]:
     workflow_status = "completed_with_denials" if denied_changes else "completed"
     event_paths = list(event_paths)
+    # Completed event is durable before audit/fix so those artifacts can cite it.
+    # This keeps audit source_artifacts aligned with the terminal workflow status.
     event_paths.append(
         events.write(
             workspace=workspace,
@@ -53,6 +62,9 @@ def finalize_success(
     audit_findings = node_results["audit"]["findings"]
     fix_proposals = node_results["fix"]["proposals"]
     if workflow_mode == "dev":
+        # Audit and fix are deterministic artifacts derived only from current-run metadata.
+        # They are written before memory so a failed audit/fix write cannot leave success
+        # memory for a run that did not fully finalize.
         audit_result = build_audit_result(
             agent_output=agent_output,
             applied_changes=applied_changes,
@@ -95,6 +107,9 @@ def finalize_success(
     )
     memory_paths: list[Path] = []
     try:
+        # Memory is intentionally late: all terminal non-memory artifacts are durable first.
+        # The final workflow path has been policy-prechecked, but the workflow is written only
+        # after memory paths are known so it can bind the exact artifacts returned to callers.
         memory_path = memory.write(
             workspace=workspace,
             kind="session",
@@ -148,6 +163,9 @@ def finalize_success(
             checked_path=checked_workflow_path,
         )
     except Exception as exc:
+        # A failed finalization must not leave a reusable workflow permit or success memory.
+        # The original exception is re-raised; cleanup failures are attached as diagnostic
+        # notes instead of replacing the primary failure.
         workflows.discard_write_permit(
             workspace=workspace,
             task_id=task_id,

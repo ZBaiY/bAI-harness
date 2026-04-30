@@ -1,3 +1,10 @@
+"""Metadata-only foreground/background scheduler contract for phase one.
+
+Scheduler records foreground admission and deferred background intent under
+BAI_HOME/state. It never starts a worker, runs Harness for background tasks,
+sleeps, retries, or manages a durable queue.
+"""
+
 from __future__ import annotations
 
 import json
@@ -36,6 +43,8 @@ class Scheduler:
         reason: str,
     ) -> Path:
         self._require_serial(execution_policy)
+        # Deferred background records are plans only; no worker or Harness run starts here.
+        # The preemptible flag is lifecycle metadata for future control, not a running task.
         task_id = f"scheduler-{_task_token()}"
         record = {
             "task_id": task_id,
@@ -62,6 +71,8 @@ class Scheduler:
         reason: str,
     ) -> Path:
         self._require_serial(execution_policy)
+        # Foreground admission marks same-workspace background metadata as preemptible.
+        # Foreground priority is represented in artifacts without starting parallel work.
         preempted = self._mark_background_preemptible(workspace)
         task_id = f"scheduler-{_task_token()}"
         record = {
@@ -133,6 +144,8 @@ class Scheduler:
 
     def _write(self, *, workspace: WorkspaceRecord, record: dict[str, Any]) -> Path:
         path = self.directory / f"{record['task_id']}.json"
+        # Scheduler state is an effect and must stay under runtime state. Policy gating here
+        # prevents scheduler metadata from becoming a project-local queue or source artifact.
         decision = self.policy.gate_effect(
             workspace=workspace,
             effect={"kind": "scheduler_write", "path": str(path)},

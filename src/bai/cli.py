@@ -1,3 +1,10 @@
+"""Command-line entrypoint for the global bai runtime.
+
+The CLI resolves explicit workspaces from BAI_HOME config and then enters
+Harness or metadata-only scheduler admission. It does not discover projects,
+crawl directories, or treat this source checkout as a user project root.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -78,6 +85,9 @@ def run_harness(
     workspaces.validate(workspace)
     scheduler = Scheduler(runtime=workspaces.runtime, workspaces=workspaces)
     if background:
+        # Background mode is metadata-only in phase one; Harness is not invoked. This is the
+        # CLI boundary that prevents deferred work from executing effects, writing memory, or
+        # creating workflow/audit/fix artifacts.
         scheduler_path = scheduler.defer_background(
             workspace=workspace,
             request=request,
@@ -110,6 +120,8 @@ def run_harness(
             approved_mutation_paths=approved_mutation_paths,
         )
     except USER_FACING_EXCEPTIONS as exc:
+        # Reconcile admission metadata before returning a user-facing failure. The scheduler
+        # artifact is admission state, so it must not remain "accepted" after Harness fails.
         scheduler.fail_foreground(
             workspace=workspace,
             scheduler_path=scheduler_path,
@@ -117,6 +129,8 @@ def run_harness(
         )
         raise
     except Exception as exc:
+        # Internal errors still update scheduler state, then bubble to the CLI boundary.
+        # The generic CLI handler keeps them distinct from ordinary user-facing failures.
         scheduler.fail_foreground(
             workspace=workspace,
             scheduler_path=scheduler_path,

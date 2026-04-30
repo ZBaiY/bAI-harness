@@ -1,3 +1,10 @@
+"""Trusted direct test-command subprocess adapter with bounded output capture.
+
+The adapter runs an explicitly allowed argv with shell=False in the workspace
+root. It bounds retained stdout/stderr but does not sandbox filesystem writes
+or manage process trees beyond killing the immediate child on timeout.
+"""
+
 from __future__ import annotations
 
 import subprocess
