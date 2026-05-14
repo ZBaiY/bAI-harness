@@ -36,6 +36,8 @@ class PlanAgent:
         command_request, test_request = _split_test_request(effective_request)
         if command_request.startswith("propose-create "):
             proposed_changes.append(_create_proposal(command_request.removeprefix("propose-create ").strip()))
+        if command_request.startswith("propose-modify "):
+            proposed_changes.append(_modify_proposal(command_request.removeprefix("propose-modify ").strip()))
         if command_request.startswith("inspect "):
             path = command_request.removeprefix("inspect ").strip()
             proposed_effects.append({"kind": "inspect_file", "path": path})
@@ -82,6 +84,22 @@ def _create_proposal(path: str) -> dict[str, Any]:
         "operation": "create",
         "content": "# created by bai phase-one harness\n",
         "rationale": "bounded phase-one create proposal",
+        "requires_approval": True,
+    }
+
+
+def _modify_proposal(raw: str) -> dict[str, Any]:
+    try:
+        parts = shlex.split(raw)
+    except ValueError as exc:
+        raise BaiUserError(f"modify proposal parse failed: {exc}") from exc
+    if len(parts) != 3 or parts[1] != "--content":
+        raise BaiUserError("propose-modify requires: <path> --content <text>")
+    return {
+        "path": parts[0],
+        "operation": "modify",
+        "content": parts[2],
+        "rationale": "bounded phase-one modify proposal",
         "requires_approval": True,
     }
 

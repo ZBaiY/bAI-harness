@@ -29,6 +29,14 @@ from .test_command import TestCommandExecutor
 INSPECTION_PREVIEW_CHARS = 4096
 
 
+class TestCommandRunError(BaiUserError):
+    """Raised after recording a nonzero trusted test command result."""
+
+    def __init__(self, message: str, test_runs: list[dict[str, Any]]) -> None:
+        super().__init__(message)
+        self.test_runs = list(test_runs)
+
+
 class EffectExecutor:
     def __init__(
         self,
@@ -123,8 +131,9 @@ class EffectExecutor:
             if result["exit_code"] != 0:
                 # Nonzero tests fail the run so success memory is not written. Failed-event
                 # recovery happens in Harness, where task lifecycle context is available.
-                raise BaiUserError(
-                    f"test command failed with exit code {result['exit_code']}"
+                raise TestCommandRunError(
+                    f"test command failed with exit code {result['exit_code']}",
+                    test_runs,
                 )
         return test_runs
 

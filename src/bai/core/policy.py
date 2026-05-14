@@ -46,7 +46,7 @@ class PolicyEngine:
         if output.get("execution_policy") != "serial":
             return PolicyDecision(False, "phase-one agent output must be serial")
         for change in output.get("proposed_changes", []):
-            if change.get("operation") not in {"create", "modify", "delete"}:
+            if change.get("operation") not in {"create", "modify"}:
                 return PolicyDecision(False, "invalid proposed change operation")
             if not change.get("path"):
                 return PolicyDecision(False, "proposed change requires a path")

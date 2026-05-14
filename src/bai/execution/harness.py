@@ -20,6 +20,7 @@ from ..artifacts.memory import MemoryStore
 from ..artifacts.task_events import TaskEventStore
 from ..artifacts.workflow import (
     WorkflowStore,
+    build_bug_fix_optic_trace,
     build_phase_one_workflow,
     developer_node_results,
 )
@@ -29,7 +30,7 @@ from ..core.errors import BaiUserError, HarnessBoundaryError
 from ..core.policy import PolicyEngine, PolicyEngineInterface
 from ..core.runtime import RuntimePaths
 from .agent import PlanAgent
-from .effects import EffectExecutor, INSPECTION_PREVIEW_CHARS
+from .effects import EffectExecutor, INSPECTION_PREVIEW_CHARS, TestCommandRunError
 from .finalize import apply_audit_result, audit_source_artifacts, finalize_success
 from .test_command import TestCommandExecutor
 
@@ -269,6 +270,11 @@ class Harness:
                 "fix_artifact": (
                     str(finalized["fix_path"]) if finalized["fix_path"] else None
                 ),
+                "optic_trace_artifact": (
+                    str(finalized["optic_trace_path"])
+                    if finalized["optic_trace_path"]
+                    else None
+                ),
                 "event_artifacts": [str(path) for path in finalized["event_paths"]],
                 "applied_changes": applied_changes,
                 "denied_changes": denied_changes,
@@ -279,6 +285,8 @@ class Harness:
                 "fix_proposals": finalized["fix_proposals"],
             }
         except EXPECTED_RUN_FAILURES as exc:
+            if isinstance(exc, TestCommandRunError):
+                test_runs = list(exc.test_runs)
             try:
                 # Expected run failures still get failed lifecycle evidence when possible.
                 # Secondary artifact failures are attached as notes so the original user-facing
@@ -357,9 +365,34 @@ class Harness:
                             fix_proposals=fix_proposals,
                             fix_path=fix_path,
                         )
+                        optic_trace_path: Path | None = None
+                        try:
+                            optic_trace_path = self.workflows.optic_trace_path(task_id)
+                            self.workflows.write_optic_trace(
+                                workspace=workspace,
+                                task_id=task_id,
+                                trace=build_bug_fix_optic_trace(
+                                    task_id=task_id,
+                                    workspace=workspace,
+                                    workflow_status="failed",
+                                    node_results=node_results,
+                                    context_path=context_path,
+                                    approval_paths=terminal_approval_paths,
+                                    event_paths=event_paths,
+                                    audit_path=audit_path,
+                                    fix_path=fix_path,
+                                    optic_trace_path=optic_trace_path,
+                                    applied_changes=applied_changes,
+                                    mutation_approval_paths=mutation_approval_paths,
+                                ),
+                            )
+                        except Exception as trace_exc:
+                            optic_trace_path = None
+                            exc.add_note(f"failed optic trace write failed: {trace_exc}")
                         workflow_kwargs = {
                             "audit_path": audit_path,
                             "fix_path": fix_path,
+                            "optic_trace_path": optic_trace_path,
                             "node_results": node_results,
                             "audit_findings": audit_result["findings"],
                             "fix_proposals": fix_proposals,

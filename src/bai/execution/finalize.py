@@ -14,7 +14,11 @@ from ..artifacts.audit import AuditStore, build_audit_result
 from ..artifacts.fix import FixStore, build_fix_proposals
 from ..artifacts.memory import MemoryStore
 from ..artifacts.task_events import TaskEventStore
-from ..artifacts.workflow import WorkflowStore, build_phase_one_workflow
+from ..artifacts.workflow import (
+    WorkflowStore,
+    build_bug_fix_optic_trace,
+    build_phase_one_workflow,
+)
 from ..config.workspace import WorkspaceRecord
 
 
@@ -101,6 +105,28 @@ def finalize_success(
             fix_path=fix_path,
         )
 
+    optic_trace_path: Path | None = None
+    if workflow_mode == "dev":
+        optic_trace_path = workflows.optic_trace_path(task_id)
+        workflows.write_optic_trace(
+            workspace=workspace,
+            task_id=task_id,
+            trace=build_bug_fix_optic_trace(
+                task_id=task_id,
+                workspace=workspace,
+                workflow_status=workflow_status,
+                node_results=node_results,
+                context_path=context_path,
+                approval_paths=approval_paths,
+                event_paths=event_paths,
+                audit_path=audit_path,
+                fix_path=fix_path,
+                optic_trace_path=optic_trace_path,
+                applied_changes=applied_changes,
+                mutation_approval_paths=mutation_approval_paths,
+            ),
+        )
+
     checked_workflow_path = workflows.check_write_allowed(
         workspace=workspace,
         task_id=task_id,
@@ -159,6 +185,7 @@ def finalize_success(
                 node_results=node_results,
                 audit_findings=audit_findings,
                 fix_proposals=fix_proposals,
+                optic_trace_path=optic_trace_path,
             ),
             checked_path=checked_workflow_path,
         )
@@ -186,6 +213,7 @@ def finalize_success(
         "memory_paths": memory_paths,
         "audit_path": audit_path,
         "fix_path": fix_path,
+        "optic_trace_path": optic_trace_path,
         "event_paths": event_paths,
         "audit_findings": audit_findings,
         "fix_proposals": fix_proposals,

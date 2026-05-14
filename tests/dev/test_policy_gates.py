@@ -88,6 +88,34 @@ def test_policy_rejects_explicit_parallel_agent_output_before_approval_memory_or
     assert list(workspace_root.iterdir()) == [workspace_root / "README.md"]
 
 
+def test_policy_rejects_delete_mutation_proposals_before_effect_execution(
+    runtime: RuntimePaths, workspace_root: Path
+) -> None:
+    store = WorkspaceStore(runtime)
+    record = store.add("demo", workspace_root)
+    policy = PolicyEngine(store)
+
+    decision = policy.gate_agent_output(
+        {
+            "id": "plan-delete",
+            "agent_kind": "plan",
+            "workspace_id": record.workspace_id,
+            "execution_policy": "serial",
+            "proposed_changes": [
+                {
+                    "path": str(workspace_root / "README.md"),
+                    "operation": "delete",
+                    "requires_approval": True,
+                }
+            ],
+            "proposed_effects": [],
+        }
+    )
+
+    assert decision.allowed is False
+    assert decision.reason == "invalid proposed change operation"
+
+
 def test_policy_gate_blocks_approval_artifact_before_write(
     runtime: RuntimePaths, workspace_root: Path
 ) -> None:
